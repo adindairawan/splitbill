@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Receipt Splitter</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #f0f2f5;}
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;}
+        button:hover { background: #0056b3; }
+        input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; vertical-align: top;}
+        .totals-box { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-top: 20px; }
+        .checkbox-group { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px; }
+        .checkbox-label { font-size: 14px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h2>🧾 1. Upload Receipt</h2>
+        <input type="file" id="receiptImage" accept="image/*">
+        <button onclick="processReceipt()" style="margin-top: 10px;">Scan Receipt</button>
+        <p id="status"></p>
+    </div>
+
+    <div class="card" id="friendsSection" style="display: none;">
+        <h2>👯 2. Who is paying?</h2>
+        <input type="text" id="newFriendName" placeholder="Enter name (e.g., Budi)">
+        <button onclick="addFriend()">Add Person</button>
+        <ul id="friendsList">
+            <li>Me</li>
+        </ul>
+    </div>
+
+    <div class="card" id="itemsSection" style="display: none;">
+        <h2>🍽️ 3. Assign Items</h2>
+        <p style="font-size: 12px; color: gray;"><b>Instructions:</b><br>
+        - Leave all boxes <b>unchecked</b> to Ignore an item (like Subtotals).<br>
+        - Check <b>Tax/Fee</b> for taxes or service charges.<br>
+        - Check <b>Multiple Friends</b> to split an item evenly between them.</p>
+        
+        <table id="itemsTable">
+            <thead>
+                <tr>
+                    <th style="width: 40%">Item & Price</th>
+                    <th style="width: 60%">Who pays?</th>
+                </tr>
+            </thead>
+            <tbody id="itemsBody"></tbody>
+        </table>
+        <br>
+        <button onclick="calculateSplit()" style="width: 100%; background: #28a745;">Calculate Final Split</button>
+    </div>
+
+    <div class="card" id="resultsSection" style="display: none;">
+        <h2>💰 Final Breakdown</h2>
+        <div id="finalTotals" class="totals-box"></div>
+    </div>
+
+    <script>
+        // 🛑 REMEMBER TO PUT YOUR HUGGING FACE URL HERE 🛑
+        const apiUrl = "https://daniboo-receipt-splitter-api.hf.space/extract"; 
+        
+        let globalItems = [];
+        let friends = ["Me"];
+
+        // --- 1. SCAN THE RECEIPT ---
+        async function processReceipt() {
+            const fileInput = document.getElementById('receiptImage');
+            const statusText = document.getElementById('status');
+
+            if (fileInput.files.length === 0) {
+                alert("Please select an image first."); return;
+            }
+
+            statusText.innerText = "⏳ Scanning with AI...";
+            statusText.style.color = "blue";
+
+            const formData = new FormData();
+            formData.append("file", fileInput.files[0]);
+
+            try {
+                const response = await fetch(apiUrl, { method: "POST", body: formData });
+                if (!response.ok) throw new Error("API Error");
+                
+                const data = await response.json();
+                globalItems = data.breakdown;
+
+                statusText.innerText = "✅ Scan Complete!";
+                statusText.style.color = "green";
+                
+                document.getElementById('friendsSection').style.display = 'block';
+                document.getElementById('itemsSection').style.display = 'block';
+                renderItemsTable();
+
+            } catch (error) {
+                statusText.innerText = "❌ Error connecting to API.";
+                statusText.style.color = "red";
+            }
+        }
+
+        // --- 2. MANAGE FRIENDS ---
+        function addFriend() {
+            const nameInput = document.getElementById('newFriendName');
+            const name = nameInput.value.trim();
+            if (name && !friends.includes(name)) {
+                friends.push(name);
+                nameInput.value = "";
+                
+                const li = document.createElement('li');
+                li.innerText = name;
+                document.getElementById('friendsList').appendChild(li);
+                
+                renderItemsTable(); // Refresh checkboxes with the new friend
+            }
+        }
+
+        // --- 3. RENDER THE INTERACTIVE CHECKBOX TABLE ---
+        function renderItemsTable() {
+            const tbody = document.getElementById('itemsBody');
+            tbody.innerHTML = ""; 
+
+            // 🛑 THE JUNK FILTER 🛑
+            // Add any annoying words you want to auto-hide here (lowercase!)
+            const junkWords = ["total", "subtotal", "items", "rounding", "debit", "kredit", "cash", "change", "kembali", "bca", "mastercard", "visa", "payment"];
+
+            globalItems.forEach((item, index) => {
+                const lowerItemName = item.item.toLowerCase();
+                
+                // If the item contains ANY of the junk words, skip it entirely!
+                const isJunk = junkWords.some(junk => lowerItemName.includes(junk));
+                if (isJunk) return; // This acts like a bouncer, kicking the junk out of the club
+
+                const tr = document.createElement('tr');
+                
+                // Build the HTML for the checkboxes
+                let checkboxesHTML = `<div class="checkbox-group">
+                    <label class="checkbox-label" style="color: #007bff; width: 100%;">
+                        <input type="checkbox" id="tax_${index}"> 💸 Tax/Fee
+                    </label>
+                    <hr style="width: 100%; border: 0; border-top: 1px solid #ddd; margin: 2px 0;">`;
+                
+                friends.forEach(friend => {
+                    checkboxesHTML += `
+                    <label class="checkbox-label">
+                        <input type="checkbox" class="item_${index}_friend" value="${friend}"> 👤 ${friend}
+                    </label>`;
+                });
+                checkboxesHTML += `</div>`;
+
+                tr.innerHTML = `
+                    <td>
+                        <b>${item.item}</b><br>
+                        <span style="color: green;">Rp ${item.price.toLocaleString('id-ID')}</span>
+                    </td>
+                    <td>${checkboxesHTML}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // --- 4. THE PROPORTIONAL MATH ALGORITHM ---
+        function calculateSplit() {
+            let sharedFees = 0;
+            let subtotalClaimed = 0;
+            let personTotals = {};
+
+            friends.forEach(f => personTotals[f] = 0);
+
+            // First Pass: Tally up the food costs and the shared tax pool
+            globalItems.forEach((item, index) => {
+                const taxCheckbox = document.getElementById(`tax_${index}`);
+                
+                // 🛑 THE BUG FIX: If the item was hidden by the Junk Filter, skip it entirely!
+                if (!taxCheckbox) return; 
+
+                const isTax = taxCheckbox.checked;
+                
+                if (isTax) {
+                    sharedFees += item.price;
+                } else {
+                    // Find out how many friends checked their box for this item
+                    const checkedBoxes = document.querySelectorAll(`.item_${index}_friend:checked`);
+                    const numberOfPeopleSharing = checkedBoxes.length;
+
+                    // If at least one person claimed it, split the cost!
+                    if (numberOfPeopleSharing > 0) {
+                        const costPerPerson = item.price / numberOfPeopleSharing;
+                        
+                        checkedBoxes.forEach(box => {
+                            personTotals[box.value] += costPerPerson;
+                        });
+                        
+                        subtotalClaimed += item.price;
+                    }
+                }
+            });
+
+            // Second Pass: Distribute the shared fees proportionally
+            let resultsHTML = "";
+            friends.forEach(friend => {
+                const myFoodCost = personTotals[friend];
+                
+                if (myFoodCost > 0) {
+                    // Prevent division by zero if someone only checked "Tax" but no food
+                    const myProportion = subtotalClaimed > 0 ? (myFoodCost / subtotalClaimed) : 0;
+                    const myTaxShare = sharedFees * myProportion;
+                    const finalOwed = myFoodCost + myTaxShare;
+
+                    resultsHTML += `<p><strong>${friend}:</strong> Rp ${Math.round(finalOwed).toLocaleString('id-ID')} <br>
+                                    <span style="font-size:12px; color:gray;">(Food: Rp ${Math.round(myFoodCost).toLocaleString('id-ID')} + Tax/Tip: Rp ${Math.round(myTaxShare).toLocaleString('id-ID')})</span></p>`;
+                }
+            });
+
+            if (resultsHTML === "") {
+                resultsHTML = "<p>Nobody claimed any items!</p>";
+            }
+
+            document.getElementById('finalTotals').innerHTML = resultsHTML;
+            document.getElementById('resultsSection').style.display = 'block';
+        }
+    </script>
+</body>
+</html>
