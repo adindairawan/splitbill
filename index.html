@@ -87,7 +87,29 @@
                 if (!response.ok) throw new Error("API Error");
                 
                 const data = await response.json();
-                globalItems = data.breakdown;
+                
+                // --- 🛑 NEW: THE CLEANUP & CUTOFF ENGINE 🛑 ---
+                let cleanedItems = [];
+                for (let i = 0; i < data.breakdown.length; i++) {
+                    let itemName = data.breakdown[i].item;
+                    let itemPrice = data.breakdown[i].price;
+                    let upperName = itemName.toUpperCase();
+
+                    // 1. Auto-Correct AI Typos
+                    if (upperName.includes("XE1")) itemName = "Tax";
+                    if (upperName.includes("TUTAL")) itemName = "Total";
+
+                    cleanedItems.push({ item: itemName, price: itemPrice });
+
+                    // 2. The Hard Cutoff: Stop reading after the Grand Total!
+                    // (This instantly deletes dates, wifi passwords, and footer garbage)
+                    if (itemName.toUpperCase() === "TOTAL" || upperName.includes("TOTAL ITEM")) {
+                        break; 
+                    }
+                }
+                
+                globalItems = cleanedItems; // Save the newly cleaned list
+                // ----------------------------------------------
 
                 statusText.innerText = "✅ Scan Complete!";
                 statusText.style.color = "green";
@@ -224,4 +246,5 @@
         }
     </script>
 </body>
+
 </html>
